@@ -4,29 +4,40 @@ from gevent import monkey
 monkey.patch_all()
 from time import time, sleep
 from bottle import request, run, post, get
-from subprocess import Popen
 from json import load
+from ocr import OCRProcessor  # Import the new OCRProcessor class
 
+# Create a global OCRProcessor instance to reuse
+ocr_processor = None
 
 @post('/ocr/')
 def ocr_post():
+    global ocr_processor
+    
     language = request.forms.get('language', 'ch_sim,en')
     upload_file = request.files.get('img_file')
     img_upload_filename = f'upload/{"".join(str(time()).split("."))}'
     upload_file.save(img_upload_filename, overwrite=True)
-    print(f'启动 {img_upload_filename} OCR 进程')
-    p = Popen(['python', './ocr.py', img_upload_filename, language])
-    while not os.path.exists(f'{img_upload_filename}.json'):
-        sleep(1)
-    print(f'完成 {img_upload_filename} OCR 进程')
-    with open(f'{img_upload_filename}.json', 'r', encoding='UTF-8') as f:
-        ocr_results = load(f)
-    print(f'关闭 {img_upload_filename} OCR 进程')
-    p.terminate()
+    print(f'Starting OCR process for {img_upload_filename}')
+    
+    # Initialize OCRProcessor if not already initialized
+    if ocr_processor is None or ocr_processor.languages != language.split(','):
+        ocr_processor = OCRProcessor(language)
+    
+    # Process the image
+    results = ocr_processor.process_image(img_upload_filename)
+    
+    # Save results temporarily
+    output_filename = f'{img_upload_filename}.json'
+    ocr_processor.save_results(results, output_filename)
+    
+    print(f'Completed OCR process for {img_upload_filename}')
+    
+    # Clean up
     os.remove(img_upload_filename)
-    os.remove(f'{img_upload_filename}.json')
-    return ocr_results
-
+    os.remove(output_filename)
+    
+    return results
 
 @get('/ocr/')
 def curtain_get():
@@ -170,7 +181,6 @@ def curtain_get():
     </body>
     </html>
     '''
-
 
 if __name__ == '__main__':
     # Browser: http://localhost:8080/ocr/
