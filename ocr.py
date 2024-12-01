@@ -7,7 +7,7 @@ from PIL import Image
 import os
 
 class OCRProcessor:
-    def __init__(self, languages, gpu=False, max_image_dimension=1024):
+    def __init__(self, languages, gpu=False, max_image_dimension=4096):
         """Initialize the OCR processor with specified languages.
         
         Args:

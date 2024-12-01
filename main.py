@@ -5,14 +5,16 @@ monkey.patch_all()
 from time import time, sleep
 from bottle import request, run, post, get
 from json import load
-from ocr import OCRProcessor  # Import the new OCRProcessor class
+from ocr import OCRProcessor
 import gc
+from threading import Lock
 
 # Global variables
 ocr_processor = None
 IDLE_TIMEOUT = 300  # 5 minutes
-MAX_IMAGE_SIZE = 1024  # Maximum image dimension
+MAX_IMAGE_SIZE = 4096  # Maximum image dimension
 ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.tiff', '.bmp'}
+request_lock = Lock()  # Add lock for request synchronization
 
 def check_and_cleanup_processor():
     """Check if processor is idle and clean it up if necessary."""
@@ -31,6 +33,11 @@ def is_valid_image(filename):
 @post('/ocr/')
 def ocr_post():
     global ocr_processor
+    img_upload_filename = None
+    
+    # Try to acquire lock, return busy message if can't acquire
+    if not request_lock.acquire(blocking=False):
+        return {'error': 'Server is busy processing another request. Please try again later.'}
     
     try:
         # Check and validate input
@@ -58,7 +65,7 @@ def ocr_post():
         # Check and cleanup idle processor
         check_and_cleanup_processor()
         
-        # Initialize or reinitialize processor if needed
+        # Initialize processor if needed
         if ocr_processor is None or ocr_processor.languages != language.split(','):
             if ocr_processor:
                 ocr_processor.cleanup()
@@ -74,9 +81,12 @@ def ocr_post():
         return results
         
     except Exception as e:
-        if os.path.exists(img_upload_filename):
+        if img_upload_filename and os.path.exists(img_upload_filename):
             os.remove(img_upload_filename)
         return {'error': str(e)}
+    finally:
+        # Always release the lock
+        request_lock.release()
 
 @get('/ocr/')
 def curtain_get():
