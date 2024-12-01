@@ -6,38 +6,77 @@ from time import time, sleep
 from bottle import request, run, post, get
 from json import load
 from ocr import OCRProcessor  # Import the new OCRProcessor class
+import gc
 
-# Create a global OCRProcessor instance to reuse
+# Global variables
 ocr_processor = None
+IDLE_TIMEOUT = 300  # 5 minutes
+MAX_IMAGE_SIZE = 1024  # Maximum image dimension
+ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.tiff', '.bmp'}
+
+def check_and_cleanup_processor():
+    """Check if processor is idle and clean it up if necessary."""
+    global ocr_processor
+    if ocr_processor and (time() - ocr_processor.last_used) > IDLE_TIMEOUT:
+        print("Cleaning up idle OCR processor")
+        ocr_processor.cleanup()
+        ocr_processor = None
+        gc.collect()
+
+def is_valid_image(filename):
+    """Check if the file is a valid image."""
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in ALLOWED_EXTENSIONS
 
 @post('/ocr/')
 def ocr_post():
     global ocr_processor
     
-    language = request.forms.get('language', 'ch_sim,en')
-    upload_file = request.files.get('img_file')
-    img_upload_filename = f'upload/{"".join(str(time()).split("."))}'
-    upload_file.save(img_upload_filename, overwrite=True)
-    print(f'Starting OCR process for {img_upload_filename}')
-    
-    # Initialize OCRProcessor if not already initialized
-    if ocr_processor is None or ocr_processor.languages != language.split(','):
-        ocr_processor = OCRProcessor(language)
-    
-    # Process the image
-    results = ocr_processor.process_image(img_upload_filename)
-    
-    # Save results temporarily
-    output_filename = f'{img_upload_filename}.json'
-    ocr_processor.save_results(results, output_filename)
-    
-    print(f'Completed OCR process for {img_upload_filename}')
-    
-    # Clean up
-    os.remove(img_upload_filename)
-    os.remove(output_filename)
-    
-    return results
+    try:
+        # Check and validate input
+        upload_file = request.files.get('img_file')
+        if not upload_file:
+            return {'error': 'No file uploaded'}
+        
+        if not is_valid_image(upload_file.filename):
+            return {'error': 'Invalid file type'}
+        
+        language = request.forms.get('language', 'ch_sim,en')
+        
+        # Save uploaded file
+        img_upload_filename = f'upload/{"".join(str(time()).split("."))}'
+        upload_file.save(img_upload_filename, overwrite=True)
+        
+        # Check file size
+        file_size = os.path.getsize(img_upload_filename)
+        if file_size > 10 * 1024 * 1024:  # 10MB limit
+            os.remove(img_upload_filename)
+            return {'error': 'File too large'}
+        
+        print(f'Starting OCR process for {img_upload_filename}')
+        
+        # Check and cleanup idle processor
+        check_and_cleanup_processor()
+        
+        # Initialize or reinitialize processor if needed
+        if ocr_processor is None or ocr_processor.languages != language.split(','):
+            if ocr_processor:
+                ocr_processor.cleanup()
+            ocr_processor = OCRProcessor(language, max_image_dimension=MAX_IMAGE_SIZE)
+        
+        # Process the image
+        results = ocr_processor.process_image(img_upload_filename)
+        
+        # Clean up
+        os.remove(img_upload_filename)
+        gc.collect()
+        
+        return results
+        
+    except Exception as e:
+        if os.path.exists(img_upload_filename):
+            os.remove(img_upload_filename)
+        return {'error': str(e)}
 
 @get('/ocr/')
 def curtain_get():

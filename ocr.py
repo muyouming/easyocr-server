@@ -2,17 +2,23 @@ import sys
 import easyocr
 from time import time
 from json import dump
+import gc
+from PIL import Image
+import os
 
 class OCRProcessor:
-    def __init__(self, languages, gpu=False):
+    def __init__(self, languages, gpu=False, max_image_dimension=1024):
         """Initialize the OCR processor with specified languages.
         
         Args:
             languages (list): List of language codes
             gpu (bool): Whether to use GPU acceleration
+            max_image_dimension (int): Maximum dimension (width/height) for input images
         """
         self.languages = languages if isinstance(languages, list) else languages.split(',')
         self.init_time = 0
+        self.max_image_dimension = max_image_dimension
+        self.last_used = time()
         
         init_start = time()
         self.reader = easyocr.Reader(
@@ -24,15 +30,31 @@ class OCRProcessor:
         init_end = time()
         self.init_time = init_end - init_start
 
-    def process_image(self, img_filename):
-        """Process an image file and return OCR results.
-        
-        Args:
-            img_filename (str): Path to the image file
+    def resize_image(self, image_path):
+        """Resize image if it exceeds maximum dimensions."""
+        with Image.open(image_path) as img:
+            # Convert to RGB if necessary
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
             
-        Returns:
-            dict: OCR results including timing and detected text
-        """
+            # Check if resize is needed
+            w, h = img.size
+            if w > self.max_image_dimension or h > self.max_image_dimension:
+                ratio = min(self.max_image_dimension/w, self.max_image_dimension/h)
+                new_size = (int(w*ratio), int(h*ratio))
+                img = img.resize(new_size, Image.LANCZOS)
+                
+                # Save resized image
+                resized_path = f"{image_path}_resized.jpg"
+                img.save(resized_path, 'JPEG', quality=95)
+                return resized_path
+            
+            return image_path
+
+    def process_image(self, img_filename):
+        """Process an image file and return OCR results."""
+        self.last_used = time()
+        
         ocr_results = {
             'language': self.languages,
             'init_take': self.init_time,
@@ -43,8 +65,11 @@ class OCRProcessor:
         }
 
         try:
+            # Resize image if necessary
+            processed_img_path = self.resize_image(img_filename)
+            
             ocr_start = time()
-            result = self.reader.readtext(img_filename)
+            result = self.reader.readtext(processed_img_path)
             
             for _res in result:
                 ocr_results['summary_result'].append(_res[1])
@@ -59,8 +84,15 @@ class OCRProcessor:
             ocr_end = time()
             ocr_results['ocr_take'] = ocr_end - ocr_start
             
+            # Clean up
+            if processed_img_path != img_filename:
+                os.remove(processed_img_path)
+            
         except Exception as e:
             ocr_results['error'] = str(e)
+        
+        # Force garbage collection
+        gc.collect()
             
         return ocr_results
 
@@ -73,6 +105,11 @@ class OCRProcessor:
         """
         with open(output_filename, 'w', encoding='UTF-8') as f:
             dump(results, f)
+
+    def cleanup(self):
+        """Clean up resources."""
+        self.reader = None
+        gc.collect()
 
 def main():
     if len(sys.argv) < 3:
