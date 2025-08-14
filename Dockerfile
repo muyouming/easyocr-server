@@ -1,44 +1,54 @@
-FROM condaforge/miniforge3:latest
+# Multi-stage build for smaller image size
+FROM python:3.9-slim as builder
 
-# if you forked EasyOCR, you can pass in your own GitHub username to use your fork
-# i.e. gh_username=myname
-ARG gh_username=JaidedAI
-ARG service_home="/home/EasyOCR"
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
-# # Configure apt and install packages
-# RUN apt-get update -y && \
-#     apt-get install -y \
-#     libglib2.0-0 \
-#     libsm6 \
-#     libxext6 \
-#     libxrender-dev \
-#     libgl1-mesa-dev \
-#     git \
-#     # cleanup
-#     && apt-get autoremove -y \
-#     && apt-get clean -y \
-#     && rm -rf /var/lib/apt/lists
+# Install Python packages with CPU-only PyTorch (much smaller)
+RUN pip install --no-cache-dir --user \
+    numpy \
+    torch==2.0.1+cpu torchvision==0.15.2+cpu -f https://download.pytorch.org/whl/torch_stable.html \
+    easyocr \
+    bottle \
+    gevent
 
-# Clone EasyOCR repo
-RUN mkdir "$service_home" \
-    && git clone "https://github.com/$gh_username/EasyOCR.git" "$service_home" \
-    && cd "$service_home" \
-    && git remote add upstream "https://github.com/JaidedAI/EasyOCR.git" \
-    && git pull upstream master
+# Final stage - runtime image
+FROM python:3.9-slim
 
-# Build
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgthread-2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
 
+# Make sure scripts in .local are usable
+ENV PATH=/root/.local/bin:$PATH
 
-RUN cd "$service_home" 
-# \
-#     && python setup.py build_ext --inplace -j 4 \
-#     && python -m pip install -e .
+# Set working directory
+WORKDIR /app
 
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# Copy only necessary application files
+COPY main.py ocr.py requirements.txt ./
+COPY examples ./examples
 
-COPY . "$service_home" 
-WORKDIR "$service_home"
-RUN pip install -r requirements.txt
-EXPOSE 8080/tcp
+# Create upload directory
+RUN mkdir -p upload model
+
+# Download models at build time (optional - comment out if you want smaller image)
+# This pre-downloads models to avoid runtime download delays
+# RUN python -c "import easyocr; reader = easyocr.Reader(['en'], gpu=False)"
+
+EXPOSE 8080
+
 CMD ["python", "main.py"]
