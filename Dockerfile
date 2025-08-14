@@ -1,25 +1,41 @@
 # Multi-stage build for smaller image size
-FROM python:3.9-slim as builder
+FROM python:3.9-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     gcc \
     g++ \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages with CPU-only PyTorch (much smaller)
-RUN pip install --no-cache-dir --user \
-    numpy \
-    torch==2.0.1+cpu torchvision==0.15.2+cpu -f https://download.pytorch.org/whl/torch_stable.html \
+# Create a virtual environment to ensure clean dependency installation
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Upgrade pip and install wheel for better package handling
+RUN pip install --upgrade pip wheel setuptools
+
+# Install NumPy first (required by other packages)
+RUN pip install --no-cache-dir numpy==1.24.3
+
+# Install CPU-only PyTorch
+RUN pip install --no-cache-dir \
+    torch==2.0.1+cpu torchvision==0.15.2+cpu \
+    -f https://download.pytorch.org/whl/torch_stable.html
+
+# Install other dependencies
+RUN pip install --no-cache-dir \
     easyocr \
     bottle \
-    gevent
+    gevent \
+    Pillow \
+    scipy
 
 # Final stage - runtime image
 FROM python:3.9-slim
 
-# Install only runtime dependencies
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libsm6 \
@@ -27,28 +43,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     libgomp1 \
     libgthread-2.0-0 \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+# Copy the virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
 
-# Make sure scripts in .local are usable
-ENV PATH=/root/.local/bin:$PATH
+# Set environment to use the virtual environment
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH="/opt/venv/lib/python3.9/site-packages"
 
 # Set working directory
 WORKDIR /app
 
-# Copy only necessary application files
+# Create required directories
+RUN mkdir -p upload model logs
+
+# Copy application files
 COPY main.py ocr.py requirements.txt ./
 COPY examples ./examples
 
-# Create upload directory
-RUN mkdir -p upload model
+# Test that NumPy is working
+RUN python -c "import numpy; print(f'NumPy version: {numpy.__version__}')"
 
-# Download models at build time (optional - comment out if you want smaller image)
-# This pre-downloads models to avoid runtime download delays
-# RUN python -c "import easyocr; reader = easyocr.Reader(['en'], gpu=False)"
-
+# Expose port
 EXPOSE 8080
 
+# Set Python to run in unbuffered mode for better logging
+ENV PYTHONUNBUFFERED=1
+
+# Run the application
 CMD ["python", "main.py"]
