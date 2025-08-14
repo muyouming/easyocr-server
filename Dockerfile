@@ -16,21 +16,31 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Upgrade pip and install wheel for better package handling
 RUN pip install --upgrade pip wheel setuptools
 
-# Install NumPy first (required by other packages)
-RUN pip install --no-cache-dir numpy==1.24.3
+# CRITICAL: Install NumPy 1.x first with no-deps to prevent upgrades
+RUN pip install --no-cache-dir --no-deps numpy==1.24.3
 
-# Install CPU-only PyTorch
+# Install CPU-only PyTorch (compatible with NumPy 1.x)
 RUN pip install --no-cache-dir \
     torch==2.0.1+cpu torchvision==0.15.2+cpu \
     -f https://download.pytorch.org/whl/torch_stable.html
 
-# Install other dependencies
+# Install compatible dependencies for NumPy 1.24.3
 RUN pip install --no-cache-dir \
-    easyocr \
-    bottle \
-    gevent \
-    Pillow \
-    scipy
+    scipy==1.9.1 \
+    scikit-image==0.20.0 \
+    opencv-python-headless==4.7.0.72 \
+    Pillow==9.5.0
+
+# Install EasyOCR and remaining dependencies
+RUN pip install --no-cache-dir --no-deps easyocr==1.7.0 && \
+    pip install --no-cache-dir \
+    bottle==0.12.25 \
+    gevent==23.9.1 \
+    pyclipper==1.3.0.post5 \
+    python-bidi==0.4.2 \
+    PyYAML==6.0.1 \
+    shapely==2.0.2 \
+    ninja==1.11.1
 
 # Final stage - runtime image
 FROM python:3.9-slim
@@ -64,8 +74,11 @@ RUN mkdir -p upload model logs
 COPY main.py ocr.py requirements.txt ./
 COPY examples ./examples
 
-# Test that NumPy is working
-RUN python -c "import numpy; print(f'NumPy version: {numpy.__version__}')"
+# Verify NumPy version is correct and test imports
+RUN python -c "import numpy; assert numpy.__version__.startswith('1.24'), f'NumPy version {numpy.__version__} is not 1.24.x'; print(f'NumPy version: {numpy.__version__}')" && \
+    python -c "import torch; print(f'PyTorch version: {torch.__version__}')" && \
+    python -c "import torchvision; print(f'Torchvision version: {torchvision.__version__}')" && \
+    python -c "import easyocr; print('EasyOCR imported successfully')"
 
 # Expose port
 EXPOSE 8080
